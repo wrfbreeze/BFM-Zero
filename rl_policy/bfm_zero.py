@@ -502,6 +502,42 @@ class BFMZeroPolicy:
         if self.wc_msg is None:
             return
 
+        # Map left_stick and right_stick to velocity commands (quantized to 0.1 steps)
+        def quantize(val):
+            return np.round(val, 1)
+
+        # Clamp to [-1, 1], then to [0, 1] if you only want positive velocities
+        left_x = np.clip(self.wc_msg.left_stick[0], -1, 1)
+        left_y = np.clip(self.wc_msg.left_stick[1], -1, 1)
+        right_x = np.clip(self.wc_msg.right_stick[0], -1, 1)
+
+        # Quantize to 0.1 steps
+        left_x = quantize(left_x)
+        left_y = quantize(left_y)
+        right_x = quantize(right_x)
+
+        # Only one velocity can be nonzero at a time (priority: forward/backward > left/right > rotation)
+        if abs(left_y) > 0:
+            self.lin_vel_command[0, 0] = left_y
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] = 0.0
+        elif abs(left_x) > 0:
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] = -left_x
+            self.ang_vel_command[0, 0] = 0.0
+        elif abs(right_x) > 0:
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] = -right_x
+        else:
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] = 0.0
+
+        # logger.info(colored(
+        #     f"Joystick lin_vel_command: {self.lin_vel_command}, ang_vel_command: {self.ang_vel_command}", "green"
+        # ))
+
         # print(f"wc_msg.A: {self.wc_msg.A}")
         if self.wc_msg.A and not self.last_wc_msg.A:
             self.handle_joystick_button("A")

@@ -2,7 +2,7 @@ type: teleop
 start: 0
 end: None
 stop: 0
-ctx_path: ../teleop_inference/latent_z_dicts.pkl
+ctx_path: /home/unitree/workspace/BFM-Zero/model/teleop_inference/latent_z_dicts.pkl
 selected_rewards_filter_z:
   - reward: "move-ego-low0.6-0-0.7"
     z_ids: [0]
