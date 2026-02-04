@@ -243,6 +243,16 @@ class BFMZeroPolicy:
             if self.num_selected_goals ==1:
                 logger.info(colored(f"Only one goal is selected, make sure that is what you want", "red"))
 
+        elif self.task_type == "teleop":
+            with open(exp_config['ctx_path'], "rb") as f:
+                self.z_dict = pickle.load(f)
+            self.lin_vel_command = np.zeros((1, 2))
+            self.ang_vel_command = np.zeros((1, 1))
+            # print("Keys:", self.z_dict.keys())
+            # print("Locomotion keys:", list(self.z_dict["locomotion"].keys()))
+            # print("Rotation keys:", list(self.z_dict["rotation"].keys()))
+            # print("Example latent z shape:", self.z_dict["locomotion"]["forward_speed_0.0"].shape)
+            # print("Example latent z type:", type(self.z_dict["locomotion"]["forward_speed_0.0"]))
 
     def setup_policy(self, model_path):
         # load onnx policy
@@ -283,6 +293,60 @@ class BFMZeroPolicy:
         self.state_dict["action"] = self.last_action
         for update_callback in self.update_callbacks:
             update_callback(self.state_dict)
+
+    def select_latent_z(self):
+        vel_x = self.lin_vel_command[0, 0]
+        vel_y = self.lin_vel_command[0, 1]
+        ang_z = self.ang_vel_command[0, 0]
+        locomotion = self.z_dict["locomotion"]
+        rotation = self.z_dict["rotation"]
+
+        # Threshold to ignore tiny velocities
+        lin_thresh = 1e-3
+        ang_thresh = 1e-3
+
+        # Linear motion (priority)
+        if abs(vel_x) > lin_thresh or abs(vel_y) > lin_thresh:
+            # Only use linear, set angular to zero
+            ang_z = 0.0
+            # Find closest speed key for each direction
+            def closest_key(prefix, value):
+                # Clamp value to [0, 1]
+                value = max(0.0, min(1.0, abs(value)))
+                # Find nearest available speed
+                available = [float(k.split('_')[-1]) for k in locomotion if k.startswith(prefix)]
+                nearest = min(available, key=lambda x: abs(x - value))
+                return f"{prefix}_speed_{nearest:.1f}"
+
+            if vel_x > lin_thresh:
+                key = closest_key("forward", vel_x)
+            elif vel_x < -lin_thresh:
+                key = closest_key("backward", -vel_x)
+            elif vel_y > lin_thresh:
+                key = closest_key("left", vel_y)
+            elif vel_y < -lin_thresh:
+                key = closest_key("right", -vel_y)
+            else:
+                key = "stand_still"
+            return locomotion[key]
+        # Rotation motion
+        elif abs(ang_z) > ang_thresh:
+            # Only use rotation, set linear to zero
+            vel_x = vel_y = 0.0
+            def closest_rot_key(prefix, value):
+                value = max(0.0, min(1.0, abs(value)))
+                available = [float(k.split('_')[-1]) for k in rotation if k.startswith(prefix)]
+                nearest = min(available, key=lambda x: abs(x - value))
+                return f"{prefix}_speed_{nearest:.1f}"
+
+            if ang_z > ang_thresh:
+                key = closest_rot_key("countclockwise", ang_z)
+            else:
+                key = closest_rot_key("clockwise", -ang_z)
+            return rotation[key]
+        # Stand still
+        else:
+            return locomotion["stand_still"]        
 
     def prepare_obs_for_rl(self):
         """Prepare observation for policy inference using observation classes"""
@@ -327,6 +391,10 @@ class BFMZeroPolicy:
                 print(f"obs={obs.shape}")
                 print(f"list(self.z_dict.values())[self.z_index]]={list(self.z_dict.values())[self.z_index].shape}")
                 raise e
+            
+        elif self.task_type == "teleop":
+            z = [self.select_latent_z().numpy()]
+            inputs = np.concatenate([obs, z], axis=-1).astype(np.float32)
 
         return obs_dict, inputs
 
@@ -573,20 +641,39 @@ class BFMZeroPolicy:
             logger.info("Setting to init state")
         elif keycode == "w":
             self.lin_vel_command[0, 0] += 0.1
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] = 0.0
+            logger.info(colored(f"Linear velocity command updated: {self.lin_vel_command}", "green"))
         elif keycode == "s":
             self.lin_vel_command[0, 0] -= 0.1
-        elif keycode == "a":
-            self.lin_vel_command[0, 1] += 0.1
-        elif keycode == "d":
-            self.lin_vel_command[0, 1] -= 0.1
-        elif keycode == "q":
-            self.ang_vel_command[0, 0] -= 0.1
-        elif keycode == "e":
-            self.ang_vel_command[0, 0] += 0.1
-        elif keycode == "z":
+            self.lin_vel_command[0, 1] = 0.0
             self.ang_vel_command[0, 0] = 0.0
+            logger.info(colored(f"Linear velocity command updated: {self.lin_vel_command}", "green"))
+        elif keycode == "a":
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] += 0.1
+            self.ang_vel_command[0, 0] = 0.0
+            logger.info(colored(f"Linear velocity command updated: {self.lin_vel_command}", "green"))
+        elif keycode == "d":
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] -= 0.1
+            self.ang_vel_command[0, 0] = 0.0
+            logger.info(colored(f"Linear velocity command updated: {self.lin_vel_command}", "green"))
+        elif keycode == "q":
             self.lin_vel_command[0, 0] = 0.0
             self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] -= 0.1
+            logger.info(colored(f"Angular velocity command updated: {self.ang_vel_command}", "green"))
+        elif keycode == "e":
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] += 0.1
+            logger.info(colored(f"Angular velocity command updated: {self.ang_vel_command}", "green"))
+        elif keycode == "z":
+            self.lin_vel_command[0, 0] = 0.0
+            self.lin_vel_command[0, 1] = 0.0
+            self.ang_vel_command[0, 0] = 0.0
+            logger.info(colored(f"Velocity commands reset to zero", "green"))
         elif keycode == "5":
             self.command_sender.kp_level -= 0.01
             for i in range(len(self.command_sender.robot_kp)):
